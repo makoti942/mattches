@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deriv Trading Bot - API Token Only</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+    <style>
+        * { font-family: 'Courier New', monospace; }
+        body { background: #000; color: #00ff00; padding: 20px; margin: 0; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .panel { background: #111; padding: 20px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #00ff00; }
+        input, button, select { 
+            background: #222; color: #00ff00; border: 1px solid #444; 
+            padding: 12px; margin: 5px; border-radius: 4px; width: 200px; 
+        }
+        button { 
+            background: #00aa00; cursor: pointer; font-weight: bold; width: auto; 
+            padding: 12px 24px; margin: 5px;
+        }
+        button:hover { background: #00cc00; }
+        button.danger { background: #cc0000; }
+        button.danger:hover { background: #ff3333; }
+        .log { 
+            height: 400px; overflow-y: auto; background: #000; 
+            padding: 15px; border: 1px solid #333; font-size: 13px; 
+            white-space: pre-wrap; border-left: 4px solid #ffaa00;
+        }
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin: 15px 0; }
+        .stat { text-align: center; padding: 15px; background: #111; border-radius: 6px; border: 1px solid #444; }
+        .success { color: #00ff88; }
+        .error { color: #ff4444; }
+        #stakeInput { width: 150px !important; }
+        #executeBtn { background: #0066ff; font-size: 16px; padding: 15px 30px !important; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 style="text-align: center; color: #00ff88;">⚡ Deriv Trading Bot - API Token Only</h1>
+        
+        <div class="panel">
+            <h3>🔑 API Token Setup</h3>
+            <input id="apiToken" placeholder="Paste your API Token here" style="width: 500px; font-size: 12px;">
+            <br>
+            <button onclick="connectBot()">🚀 CONNECT & AUTHORIZE</button>
+            <span id="status" style="margin-left: 20px; font-weight: bold;"></span>
+        </div>
+
+        <div class="panel">
+            <h3>💰 Trading Control</h3>
+            Stake: $<input id="stakeInput" type="number" value="1" step="0.01" min="0.01">
+            Barrier: <input id="barrier" type="number" value="3" min="1" max="10">
+            Duration: <input id="duration" type="number" value="5" min="1">
+            <br>
+            <button id="executeBtn" onclick="executeTrade()" style="font-size: 18px; padding: 15px 40px !important;">🎯 EXECUTE TRADE</button>
+            <button onclick="stopTrading()">⏹️ STOP ALL</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat">Balance: $<span id="balance">0.00</span></div>
+            <div class="stat">Total Trades: <span id="totalTrades">0</span></div>
+            <div class="stat">Profit: $<span id="profit">0.00</span></div>
+        </div>
+
+        <div class="panel">
+            <h3>⚡ Attack Mode</h3>
+            <button onclick="rapidFire()" class="danger">🚀 RAPID FIRE (50x)</button>
+            <button onclick="testLimits()">🧪 TEST LIMITS</button>
+            <div style="margin-top: 10px; font-size: 12px;">
+                Auto: <input type="checkbox" id="autoTrade"> 
+                <input id="autoStake" type="number" value="0.35" step="0.01" style="width: 80px;">
+                <span id="autoStatus"></span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>📊 Live Terminal</h3>
+            <div id="log" class="log">
+Waiting for API token...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let token = null;
+        let balance = 0;
+        let totalTrades = 0;
+        let totalProfit = 0;
+        let autoInterval = null;
+        let isConnected = false;
+
+        const log = (msg, type = '') => {
+            const logEl = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logEl.textContent += `[${time}] ${type ? `(${type})` : ''} ${msg}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+            console.log(msg);
+        };
+
+        const updateStatus = (msg, color = '#00ff88') => {
+            document.getElementById('status').innerHTML = `<span style="color: ${color}">${msg}</span>`;
+        };
+
+        const updateStats = () => {
+            document.getElementById('balance').textContent = balance.toFixed(2);
+            document.getElementById('totalTrades').textContent = totalTrades;
+            document.getElementById('profit').textContent = totalProfit.toFixed(2);
+        };
+
+        window.connectBot = () => {
+            const apiToken = document.getElementById('apiToken').value.trim();
+            if (!apiToken) {
+                log('❌ API Token required!', 'ERROR');
+                return;
+            }
+
+            token = apiToken;
+            connectWebSocket();
+            updateStatus('Connecting...', '#ffaa00');
+            log('🔗 Connecting with API Token...', 'INFO');
+        };
+
+        const connectWebSocket = () => {
+            // Use token-based connection (no hardcoded app_id)
+            const wsUrl = 'wss://ws.derivws.com/websockets/v3';
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                log('✅ WebSocket Connected!', 'SUCCESS');
+                updateStatus('Connected & Authorizing...', '#00ff88');
+                // Authorize immediately with token
+                ws.send(JSON.stringify({ authorize: token }));
+            };
+
+            ws.onmessage = (event) => handleResponse(JSON.parse(event.data));
+            ws.onerror = (e) => {
+                log('❌ WebSocket Error: ' + e, 'ERROR');
+                updateStatus('Connection Failed', '#ff4444');
+            };
+            ws.onclose = () => {
+                log('🔌 WebSocket Closed', 'WARNING');
+                updateStatus('Disconnected', '#ff4444');
+                isConnected = false;
+            };
+        };
+
+        const handleResponse = (data) => {
+            console.log('Response:', data);
+
+            if (data.error) {
+                log(`❌ ERROR ${data.error.code}: ${data.error.message}`, 'ERROR');
+                updateStatus(`Error: ${data.error.message}`, '#ff4444');
+                return;
+            }
+
+            if (data.authorize) {
+                log(`✅ Authorized! Balance: $${data.authorize.authorize.balance}`, 'SUCCESS');
+                balance = parseFloat(data.authorize.authorize.balance);
+                updateStatus('✅ LIVE - Ready to Trade', '#00ff88');
+                isConnected = true;
+                updateStats();
+                return;
+            }
+
+            if (data.balance) {
+                balance = parseFloat(data.balance.balance);
+                updateStats();
+            }
+
+            if (data.buy && data.buy.buy) {
+                const contract = data.buy.buy;
+                totalTrades++;
+                log(`🎯 CONTRACT #${contract.contract_id} | Stake:$${contract.stake} | Payout:${contract.payout.toFixed(2)} | Barrier:${contract.parameters.barrier}`, 'SUCCESS');
+                updateStats();
+            }
+
+            if (data.proposal_open_contract && data.proposal_open_contract.proposal_open_contract) {
+                const contract = data.proposal_open_contract.proposal_open_contract;
+                if (contract.is_sold) {
+                    const profit = parseFloat(contract.profit);
+                    totalProfit += profit;
+                    const status = profit > 0 ? 'WIN' : 'LOSS';
+                    log(`💰 #${contract.contract_id} ${status}: +$${profit.toFixed(2)} | New Balance: $${(balance + profit).toFixed(2)}`, profit > 0 ? 'SUCCESS' : 'ERROR');
+                    balance += profit;
+                    updateStats();
+                }
+            }
+        };
+
+        window.executeTrade = () => {
+            if (!isConnected) {
+                log('❌ Not authorized! Connect first.', 'ERROR');
+                return;
+            }
+
+            const stake = parseFloat(document.getElementById('stakeInput').value);
+            const barrier = parseInt(document.getElementById('barrier').value);
+            const duration = parseInt(document.getElementById('duration').value);
+
+            const payload = {
+                buy: 1,
+                subscribe: 1,
+                price: stake * 0.95,  // Expected payout
+                parameters: {
+                    contract_type: "MATCHES",
+                    barrier: barrier,
+                    amount: stake,
+                    duration: duration,
+                    basis: "stake",
+                    contract_category: "binary",
+                    currency: "USD"
+                }
+            };
+
+            ws.send(JSON.stringify(payload));
+            log(`🎯 EXECUTING: $${stake} MATCHES Barrier:${barrier} Duration:${duration}`, 'WARNING');
+            document.getElementById('executeBtn').textContent = '✅ SENT - Waiting...';
+            setTimeout(() => document.getElementById('executeBtn').textContent = '🎯 EXECUTE TRADE', 2000);
+        };
+
+        window.rapidFire = () => {
+            if (!isConnected) return log('❌ Connect first!', 'ERROR');
+            log('🚀 RAPID FIRE 50x STARTED!', 'DANGER');
+            for (let i = 0; i < 50; i++) {
+                setTimeout(() => {
+                    const stake = parseFloat(document.getElementById('stakeInput').value) || 0.35;
+                    ws.send(JSON.stringify({
+                        buy: 1,
+                        parameters: {
+                            contract_type: "MATCHES",
+                            barrier: 3,
+                            amount: stake,
+                            duration: 5
+                        }
+                    }));
+                }, i * 50);
+            }
+        };
+
+        window.testLimits = () => {
+            if (!isConnected) return;
+            const tests = [
+                {barrier: 0, amount: 999999},
+                {barrier: 20, amount: 0.01},
+                {barrier: -1, amount: 1},
+                {amount: 0.000001}
+            ];
+            log('🧪 Testing limits...', 'WARNING');
+            tests.forEach((test, i) => {
+                setTimeout(() => {
+                    ws.send(JSON.stringify({
+                        buy: 1,
+                        parameters: {
+                            contract_type: "MATCHES",
+                            barrier: test.barrier || 3,
+                            amount: test.amount || 1,
+                            duration: 5
+                        }
+                    }));
+                }, i * 300);
+            });
+        };
+
+        window.stopTrading = () => {
+            if (autoInterval) clearInterval(autoInterval);
+            document.getElementById('autoStatus').textContent = '';
+            log('⏹️ All trading stopped', 'WARNING');
+        };
+
+        // Auto trading toggle
+        document.getElementById('autoTrade').addEventListener('change', (e) => {
+            if (e.target.checked) {
+                const autoStake = parseFloat(document.getElementById('autoStake').value);
+                autoInterval = setInterval(() => executeTrade(), 8000);  // Every 8s
+                document.getElementById('autoStatus').textContent = `Auto: $${autoStake} every 8s`;
+            } else {
+                clearInterval(autoInterval);
+                document.getElementById('autoStatus').textContent = '';
+            }
+        });
+
+        log('✅ Bot loaded - Paste API Token & Click CONNECT');
+    </script>
+</body>
+</html>
