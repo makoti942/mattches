@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deriv MATCHES Pentest Dashboard - App ID 82389</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        * { font-family: 'Courier New', monospace; }
+        body { background: #1a1a1a; color: #00ff00; padding: 20px; margin: 0; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .panel { background: #2a2a2a; padding: 20px; margin: 10px 0; border-radius: 8px; border: 1px solid #444; }
+        input, button, select { background: #333; color: #00ff00; border: 1px solid #555; padding: 10px; margin: 5px; border-radius: 4px; }
+        button { background: #0066cc; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0088ff; }
+        button.danger { background: #cc0000; }
+        button.danger:hover { background: #ff0000; }
+        .log { height: 300px; overflow-y: auto; background: #000; padding: 10px; border: 1px solid #555; font-size: 12px; white-space: pre-wrap; }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .stat { text-align: center; padding: 10px; background: #333; border-radius: 4px; }
+        .success { color: #00ff00; }
+        .error { color: #ff4444; }
+        .warning { color: #ffaa00; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛡️ Deriv MATCHES Pentest Dashboard (App ID: 82389)</h1>
+        
+        <div class="panel">
+            <h3>🔑 Authentication</h3>
+            <input id="apiToken" placeholder="Enter API Token" style="width: 400px;">
+            <button onclick="authorize()">Authorize</button>
+            <span id="authStatus" style="margin-left: 20px;"></span>
+        </div>
+
+        <div class="panel">
+            <h3>⚡ Quick Attacks</h3>
+            <button onclick="spamContracts()" class="danger">🚀 SPAM CONTRACTS (50x)</button>
+            <button onclick="fuzzParameters()">🧪 FUZZ PARAMETERS</button>
+            <button onclick="raceConditionTest()">⚡ RACE CONDITION</button>
+            <button onclick="collectHistory()">📊 COLLECT TICK HISTORY</button>
+        </div>
+
+        <div class="panel">
+            <h3>🎯 Manual Trading (Normal + Edge)</h3>
+            <select id="contractType">
+                <option value="MATCHES">MATCHES</option>
+                <option value="CALL">CALL</option>
+                <option value="PUT">PUT">PUT</option>
+            </select>
+            Barrier: <input id="barrier" type="number" value="3" min="1" max="10">
+            Amount: <input id="amount" type="number" value="1" step="0.01" min="0.01">
+            Duration: <input id="duration" type="number" value="5" min="1">
+            <button onclick="placeContract()">TRADE</button>
+            <button onclick="cancelContract()">CANCEL LATEST</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat">Total Contracts: <span id="totalContracts">0</span></div>
+            <div class="stat">Wins: <span id="wins">0</span></div>
+            <div class="stat">Losses: <span id="losses">0</span></div>
+            <div class="stat">Balance: $<span id="balance">0</span></div>
+        </div>
+
+        <div class="panel">
+            <h3>🔍 Live Logs</h3>
+            <div id="log" class="log">Ready... Enter API token and authorize.</div>
+        </div>
+
+        <div class="panel">
+            <h3>📈 Tick History Analysis</h3>
+            <div id="tickStats"></div>
+            <button onclick="analyzeBias()">Test RNG Bias</button>
+        </div>
+
+        <div class="panel">
+            <h3>🔒 Provably Fair Verification</h3>
+            <div id="provablyFair"></div>
+        </div>
+    </div>
+
+    <script>
+        const APP_ID = '82389';
+        const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
+        let ws = null;
+        let token = null;
+        let authorizeId = null;
+        let contracts = [];
+        let balance = 0;
+
+        const log = (msg, type = '') => {
+            const logEl = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logEl.textContent += `[${timestamp}] ${type ? `[${type}] ` : ''}${msg}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        };
+
+        const updateStats = () => {
+            document.getElementById('totalContracts').textContent = contracts.length;
+            document.getElementById('wins').textContent = contracts.filter(c => c.is_win).length;
+            document.getElementById('losses').textContent = contracts.filter(c => !c.is_win && c.contract_id).length;
+            document.getElementById('balance').textContent = balance.toFixed(2);
+        };
+
+        const connectWS = () => {
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = () => {
+                log('✅ WebSocket connected', 'success');
+                if (token && authorizeId) send({authorize: token});
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+            
+            ws.onerror = (err) => log('❌ WebSocket error', 'error');
+            ws.onclose = () => log('🔌 WebSocket closed');
+        };
+
+        const send = (msg) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(msg));
+            }
+        };
+
+        const handleMessage = (data) => {
+            console.log('WS:', data);
+            
+            if (data.authorize) {
+                token = data.authorize.authorize.token;
+                balance = data.authorize.authorize.balance;
+                document.getElementById('authStatus').innerHTML = '<span class="success">✅ AUTHORIZED</span>';
+                log('🔐 Authorized successfully', 'success');
+                updateStats();
+                return;
+            }
+            
+            if (data.balance) {
+                balance = parseFloat(data.balance.balance);
+                updateStats();
+            }
+            
+            if (data.buy) {
+                const contract = data.buy;
+                contracts.unshift(contract);
+                log(`🎯 NEW CONTRACT #${contract.contract_id} | Barrier:${contract.buy.parameters.barrier} | Payout:${contract.buy.payout}`, 'success');
+                updateStats();
+            }
+            
+            if (data.proposal_open_contract) {
+                const contract = data.proposal_open_contract;
+                if (contract.is_sold) {
+                    const profit = contract.profit;
+                    log(`💰 CONTRACT ${contract.contract_id} CLOSED | Profit: $${profit.toFixed(2)}`, profit > 0 ? 'success' : 'error');
+                }
+            }
+            
+            if (data.history) {
+                analyzeTickHistory(data.history);
+            }
+            
+            if (data.provably_fair) {
+                verifyProvablyFair(data.provably_fair);
+            }
+        };
+
+        window.authorize = () => {
+            const apiToken = document.getElementById('apiToken').value.trim();
+            if (!apiToken) return log('❌ Enter API token first', 'error');
+            
+            token = apiToken;
+            send({authorize: apiToken});
+            log('🔐 Authorizing...', 'warning');
+        };
+
+        window.placeContract = () => {
+            const params = {
+                contract_type: document.getElementById('contractType').value,
+                barrier: parseInt(document.getElementById('barrier').value),
+                amount: parseFloat(document.getElementById('amount').value),
+                duration: parseInt(document.getElementById('duration').value),
+                basis: 'stake',
+                contract_category: 'binary',
+                currency: 'USD'
+            };
+            
+            send({
+                propose_new_contract: 1,
+                parameters: params
+            });
+            log(`🎯 Placing ${params.contract_type} barrier=${params.barrier}`, 'warning');
+        };
+
+        window.cancelContract = () => {
+            if (contracts[0]) {
+                send({forget: contracts[0].contract_id});
+                log(`❌ Cancelled contract ${contracts[0].contract_id}`, 'warning');
+            }
+        };
+
+        window.spamContracts = async () => {
+            log('🚀 SPAMMING 50 CONTRACTS...', 'danger');
+            const promises = [];
+            
+            for (let i = 0; i < 50; i++) {
+                promises.push(new Promise(resolve => {
+                    setTimeout(() => {
+                        send({
+                            buy: 1,
+                            subscribe: 1,
+                            parameters: {
+                                contract_type: "MATCHES",
+                                barrier: 3,
+                                amount: 0.35,
+                                duration: 5
+                            }
+                        });
+                        resolve();
+                    }, i * 50);
+                }));
+            }
+            await Promise.all(promises);
+            log('✅ Spam complete', 'success');
+        };
+
+        window.fuzzParameters = () => {
+            log('🧪 Starting fuzz test...', 'warning');
+            const fuzzData = [
+                {barrier: 0}, {barrier: 999}, {barrier: -1}, {barrier: "XSS"},
+                {amount: 999999}, {amount: 0.0000001}, {amount: "SQL"},
+                {duration: 1}, {duration: 999}
+            ];
+            
+            fuzzData.forEach((fuzz, i) => {
+                setTimeout(() => {
+                    send({
+                        propose_new_contract: 1,
+                        parameters: {
+                            contract_type: "MATCHES",
+                            barrier: fuzz.barrier || 3,
+                            amount: fuzz.amount || 1,
+                            duration: fuzz.duration || 5
+                        }
+                    });
+                }, i * 200);
+            });
+        };
+
+        window.raceConditionTest = () => {
+            log('⚡ Testing race condition...', 'danger');
+            for (let i = 0; i < 20; i++) {
+                setTimeout(() => {
+                    send({
+                        buy: 1,
+                        parameters: {
+                            contract_type: "MATCHES", barrier: 3, amount: 10, duration: 5
+                        }
+                    });
+                }, i * 10);  // 10ms apart
+            }
+        };
+
+        window.collectHistory = () => {
+            send({
+                ticks_history: "R_10",
+                count: 1000,
+                end: "latest",
+                subscribe: 1
+            });
+            log('📊 Collecting tick history...', 'warning');
+        };
+
+        window.analyzeBias = () => {
+            send({
+                ticks_history: "R_10",
+                count: 5000,
+                end: "latest"
+            });
+            log('🔬 Analyzing RNG bias...', 'warning');
+        };
+
+        const analyzeTickHistory = (data) => {
+            if (data.history && data.history.history) {
+                const ticks = data.history.history.values.flat();
+                const up = ticks.filter(t => t > 0).length;
+                const down = ticks.length - up;
+                const bias = ((up / ticks.length) - 0.5) * 100;
+                
+                document.getElementById('tickStats').innerHTML = `
+                    <div>Total: ${ticks.length} | UP: ${up} (${(up/ticks.length*100).toFixed(1)}%)</div>
+                    <div>DOWN: ${down} (${(down/ticks.length*100).toFixed(1)}%)</div>
+                    <div style="color: ${Math.abs(bias)>2 ? 'orange' : 'green'}">Bias: ${bias.toFixed(2)}%</div>
+                `;
+            }
+        };
+
+        const verifyProvablyFair = (pf) => {
+            const entry = pf[0];
+            const msg = `${entry.client_seed}-${entry.nonce}`;
+            const computed = CryptoJS.HmacSHA256(msg, entry.server_seed).toString();
+            const valid = computed === entry.hash;
+            
+            document.getElementById('provablyFair').innerHTML = `
+                <div style="color: ${valid ? 'green' : 'red'}">
+                    Server Seed: ${entry.server_seed.slice(0,20)}...<br>
+                    Computed HMAC: ${computed.slice(0,16)}...<br>
+                    Expected: ${entry.hash.slice(0,16)}... | VALID: ${valid}
+                </div>
+            `;
+        };
+
+        // Init
+        connectWS();
+        
+        // Load CryptoJS for HMAC
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js';
+        document.head.appendChild(script);
+    </script>
+</body>
+</html>
